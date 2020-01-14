@@ -5,7 +5,10 @@
 #include <chrono>
 #include <mutex>
 
+#include <gtest/gtest.h>
+
 using namespace std;
+using namespace ::testing;
 
 #define LAST_MINUTES 10
 
@@ -62,6 +65,45 @@ public:
 	}
 };
 
-int main() {
-	return 0;
+TEST(Storage, EmptyStorage) {
+	Storage s;
+
+	EXPECT_EQ(vector<string>(), s.getRecords());
+}
+
+TEST(Storage, Positive_OneRecord) {
+	Storage s;
+	string data("hello");
+
+	s.store(23, data, chrono::system_clock::now());
+
+	EXPECT_EQ(vector<string>({data}), s.getRecords(23));
+	EXPECT_EQ(vector<string>(), s.getRecords(64));
+	EXPECT_EQ(vector<string>({data}), s.getRecords());
+}
+
+TEST(Storage, Positive_SeveralRecords) {
+	Storage s;
+	string data1("hi"), data2("chao"), data3("nihao"), data4("poka"), data5("konichuah"), data6("merci");
+
+	s.store(45, data1, chrono::system_clock::now() - chrono::minutes(5));
+	s.store(67, data2, chrono::system_clock::now() - chrono::minutes(20));
+	s.store(45, data3, chrono::system_clock::now());
+	s.store(78, data4, chrono::system_clock::now() - chrono::hours(2));
+	s.store(78, data5, chrono::system_clock::now() - chrono::hours(63));
+	s.store(78, data6, chrono::system_clock::now() - chrono::minutes(9) + chrono::seconds(57));
+
+	EXPECT_EQ(vector<string>({data1, data3}), s.getRecords(45));
+	EXPECT_EQ(vector<string>(), s.getRecords(67));
+	EXPECT_EQ(vector<string>({data6}), s.getRecords(78));
+
+	EXPECT_EQ(vector<string>(), s.getRecords(1));
+
+	EXPECT_EQ(vector<string>({data6, data1, data3}), s.getRecords());
+}
+
+int main(int argc, char **argv) {
+	InitGoogleTest(&argc, argv);
+
+	return RUN_ALL_TESTS();
 }
