@@ -9,6 +9,9 @@
 using namespace std;
 using namespace ::testing;
 
+
+#ifndef INTUITIVE
+
 pair<int, int> findSubArray(const vector<int>& nums, const int& sum = 0) {
 	// Store subsum by indexes from and to:
 	// memo[[from, to]] = subsum; 
@@ -51,6 +54,25 @@ pair<int, int> findSubArray(const vector<int>& nums, const int& sum = 0) {
 
 	return pair<int,int>(-1,-1);
 }
+
+#else
+
+pair<int, int> findSubArray(const vector<int>& nums, const int& sum = 0) {
+	for (int i = 0; i < nums.size(); ++i) {
+		int subsum = 0;
+
+		for (int j = i; j < nums.size(); ++j) {
+			subsum += nums[j];
+			if (subsum == sum) {
+				return {i, j};
+			}
+		}
+	}
+
+	return {-1, -1};
+}
+
+#endif
 
 TEST(FindSubArray, Positive_Zero) {
 	vector<int> nums {1, -7, 2, 5};

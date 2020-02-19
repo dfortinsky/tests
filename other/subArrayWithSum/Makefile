@@ -9,7 +9,7 @@ run: link
 	./subArrayWithSum
 
 link: clean gtest boost
-	g++ subArrayWithSum.cpp -std=c++14 -O3 -pthread \
+	g++ subArrayWithSum.cpp -std=c++14 -O3 -pthread $(CFLAGS) \
 		${GTEST_INCLUDES} ${GTEST_LIBS} ${BOOST_INCLUDES} \
 		-o subArrayWithSum
 
