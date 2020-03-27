@@ -8,7 +8,7 @@ run: link
 
 link: clean gtest
 	g++ Storage.cpp -std=c++14 -pthread \
-		-I${GTEST_INCLUDE} ${GTEST_LIB} \
+		${GTEST_INCLUDE} ${GTEST_LIB} \
 		-o Storage
 
 gtest:
@@ -20,8 +20,8 @@ gtest:
 	@# make
 
 	@ls "${PWD}/googletest/build/lib/libgtest.a"
-GTEST_LIB = "${PWD}/googletest/build/lib/libgtest.a"
-GTEST_INCLUDE = "${PWD}/googletest/googletest/include"
+GTEST_LIB = "${PWD}/googletest/build/lib/libgtest.a" "${PWD}/googletest/build/lib/libgmock.a"
+GTEST_INCLUDE = -I"${PWD}/googletest/googletest/include" -I"${PWD}/googletest/googlemock/include"
 
 clean:
 	@rm -f Storage

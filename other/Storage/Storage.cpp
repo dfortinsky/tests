@@ -1,106 +1,202 @@
-#include <string>
-#include <map>
+#include <unordered_map>
 #include <vector>
+
+#include <algorithm>
+#include <iterator>
 
 #include <chrono>
 #include <mutex>
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 
 using namespace std;
 using namespace ::testing;
 
 #define LAST_MINUTES 10
 
-class Storage {
-	struct Data {
-		unsigned int uid;
-		string info;
+namespace {
 
-		Data(const unsigned int& uid,
-			const string& data)
-			// const chrono::time_point<std::chrono::system_clock>& timeStamp)
-				: uid(uid), info(data) {
-		}
-	};
-
-	// What's more important user id or timestamp?
-	// Should I check for non-existing user?
-	// Should I erase records after some time?
-	// TimeStamp is always bigger then previos one? Or I should sort it for binary search in future?
-
-	// I assume
-	// 1. I don't check fraud uid
-	// 2. I never erase records
-	// 3. Timestamp can be random
-	// 4. There is a multithreading system
-	// 5. I need to return only info
-	map<chrono::time_point<std::chrono::system_clock>, Data> records;
-	mutex mute;
+class Time {
 public:
-	// Store some data by user id and data
-	void store(const unsigned int& uid,
-				const string& data,
-				const chrono::time_point<std::chrono::system_clock>& timeStamp) {
+	chrono::time_point<chrono::system_clock> now() const {
+		return chrono::system_clock::now();
+	}
+};
+
+template <typename TimeHelper>
+class StorageBase {
+	// We want to guess if page was loaded by robot or real user. We store clicks for user ID and
+	// if there were very low amount (or event zero) thah was an robot. (How much is enougth is
+	// out of scope.)
+	// We want store a click when it happens, and sometime in future to query stored amount for
+	// last 10 mins for user ID and all users.
+
+	// Map/set are not effective in insertion (O(nlogn)) because of sorted nature of store() calls and
+	// quering amount of clicks cant be O(1) because of std::distance() will take O(n).
+
+	// Open question: when to erase old clicks? Obviosly store() calls will be frequent, so maybe
+	// in getClicks()?
+
+	unordered_map<unsigned int, vector<chrono::time_point<std::chrono::system_clock> > > records;
+	mutex mute;
+
+	const TimeHelper* timeHelper;
+public:
+	StorageBase(const TimeHelper* helper, const unsigned int& size = 1024)
+	: timeHelper(helper) {
+		records.reserve(size);
+	}
+
+	void store(const unsigned int& uid) {
 		if (uid == 0) {
 			return;
 		}
 
+		const chrono::time_point<std::chrono::system_clock> time = timeHelper->now();
 		lock_guard<mutex> lock(mute);
-		records.emplace(timeStamp, move(Data(uid, data)));
+
+		auto it = records.begin();
+		if ((it = records.find(uid)) != records.end()) {
+			it->second.emplace_back(time);
+			return;
+		}
+
+		records.emplace(uid, vector<chrono::time_point<std::chrono::system_clock> >({ time }));
+		return;
 	}
 
-	// Get all or specified user records during 10 min from function call moment
-	vector<string> getRecords(const unsigned int& uid = 0) {
-		const auto& now = chrono::system_clock::now() - chrono::minutes(LAST_MINUTES);
+	unsigned int getUserClicks(const unsigned int& uid) {
+		if (uid == 0) {
+			return 0;
+		}
 
-		vector<string> r;
-		for (auto i = records.lower_bound(now); i != records.end(); ++i) {
-			if (uid == 0 || i->second.uid == uid) {
-				r.emplace_back(i->second.info);
+		const auto& earlier = timeHelper->now() - chrono::minutes(LAST_MINUTES);
+		lock_guard<mutex> lock(mute);
+
+		if (uid != 0) {
+			auto it = records.begin();
+			if ((it = records.find(uid)) != records.end()) {
+				auto vit = lower_bound(it->second.begin(), it->second.end(), earlier);
+				return distance(vit, it->second.end());
 			}
 		}
 
-		return r;
+		return 0;
+	}
+
+	unsigned int getAllClicks() {
+		const auto& earlier = timeHelper->now() - chrono::minutes(LAST_MINUTES);
+		lock_guard<mutex> lock(mute);
+
+		unsigned int clicks = 0;
+		for (auto it = records.begin(); it != records.end(); ++it) {
+			auto vit = lower_bound(it->second.begin(), it->second.end(), earlier);
+			clicks += distance(vit, it->second.end());
+		}
+
+		return clicks;
 	}
 };
 
-TEST(Storage, EmptyStorage) {
-	Storage s;
+class TimeMock {
+public:
+	MOCK_CONST_METHOD0(now, chrono::time_point<chrono::system_clock>());
+};
 
-	EXPECT_EQ(vector<string>(), s.getRecords());
+typedef StorageBase<TimeMock> TestedStorage;
+
+TEST(Storage, Positive_Empty) {
+	TimeMock timeMock;
+	TestedStorage s(&timeMock);
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(chrono::system_clock::now()));
+	EXPECT_EQ(0, s.getAllClicks());
 }
 
-TEST(Storage, Positive_OneRecord) {
-	Storage s;
-	string data("hello");
+TEST(Storage, Positive_OneClick) {
+	TimeMock timeMock;
+	TestedStorage s(&timeMock, 16);
 
-	s.store(23, data, chrono::system_clock::now());
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(chrono::system_clock::now()));
+	s.store(23);
 
-	EXPECT_EQ(vector<string>({data}), s.getRecords(23));
-	EXPECT_EQ(vector<string>(), s.getRecords(64));
-	EXPECT_EQ(vector<string>({data}), s.getRecords());
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(chrono::system_clock::now()));
+	EXPECT_EQ(1, s.getUserClicks(23));
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(chrono::system_clock::now()));
+	EXPECT_EQ(0, s.getUserClicks(64));
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(chrono::system_clock::now()));
+	EXPECT_EQ(1, s.getAllClicks());
 }
 
-TEST(Storage, Positive_SeveralRecords) {
-	Storage s;
-	string data1("hi"), data2("chao"), data3("nihao"), data4("poka"), data5("konichuah"), data6("merci");
+TEST(Storage, Positive_SeveralClicks) {
+	TimeMock timeMock;
+	TestedStorage s(&timeMock, 16);
 
-	s.store(45, data1, chrono::system_clock::now() - chrono::minutes(5));
-	s.store(67, data2, chrono::system_clock::now() - chrono::minutes(20));
-	s.store(45, data3, chrono::system_clock::now());
-	s.store(78, data4, chrono::system_clock::now() - chrono::hours(2));
-	s.store(78, data5, chrono::system_clock::now() - chrono::hours(63));
-	s.store(78, data6, chrono::system_clock::now() - chrono::minutes(9) + chrono::seconds(57));
+	const chrono::time_point<chrono::system_clock> now = chrono::system_clock::now();
 
-	EXPECT_EQ(vector<string>({data1, data3}), s.getRecords(45));
-	EXPECT_EQ(vector<string>(), s.getRecords(67));
-	EXPECT_EQ(vector<string>({data6}), s.getRecords(78));
 
-	EXPECT_EQ(vector<string>(), s.getRecords(1));
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(now - chrono::hours(2)));
+	s.store(78);
 
-	EXPECT_EQ(vector<string>({data6, data1, data3}), s.getRecords());
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(now - chrono::minutes(45)));
+	s.store(45);
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(now - chrono::minutes(10)));
+	s.store(67);
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(now - chrono::minutes(7)));
+	s.store(45);
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(now - chrono::minutes(5)));
+	s.store(78);
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(now));
+	s.store(78);
+
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(now));
+	EXPECT_EQ(1, s.getUserClicks(45));
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(now));
+	EXPECT_EQ(1, s.getUserClicks(67));
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(now));
+	EXPECT_EQ(2, s.getUserClicks(78));
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(now));
+	EXPECT_EQ(4, s.getAllClicks());
+
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(now + chrono::minutes(3)));
+	EXPECT_EQ(3, s.getAllClicks());
+
+	EXPECT_CALL(timeMock, now())
+		.WillOnce(Return(now + chrono::minutes(LAST_MINUTES)));
+	EXPECT_EQ(1, s.getAllClicks());
 }
+
+} // namespace
+
+typedef StorageBase<Time> Storage;
 
 int main(int argc, char **argv) {
 	InitGoogleTest(&argc, argv);
